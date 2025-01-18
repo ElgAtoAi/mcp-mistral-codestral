@@ -1,0 +1,35 @@
+# ignore all node_modules
+node_modules/
+
+# ignore all build files
+build/
+
+# ignore all dist files
+dist/
+# ignore npm debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ignore coverage directory
+coverage/
+
+# ignore .env files containing secrets
+.env
+.env.local
+.env.*.local
+
+# ignore package lock files
+package-lock.json
+yarn.lock
+
+# ignore IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ignore temp directories
+.temp/
+.tmp/
+.cache/
