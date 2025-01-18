@@ -3,7 +3,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema, ListResourcesRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { config } from "dotenv";
 import { z } from "zod";
-import { getMistralAPI, CompletionResponse } from './mistral.js';
+import { getMistralAPI, CompletionResponse, MISTRAL_MODELS, MistralModel } from './mistral.js';
+import fs from 'fs/promises';
+import path from 'path';
 
 // Load environment variables
 config();
@@ -46,7 +48,15 @@ const server = new Server(
 const CodeCompletionSchema = z.object({
   code: z.string(),
   language: z.string().optional(),
-  task: z.enum(['complete', 'fix', 'test']),
+  task: z.enum(['complete', 'fix', 'test', 'fim']),
+  model: z.enum([MISTRAL_MODELS.CODESTRAL, MISTRAL_MODELS.CODESTRAL_MAMBA]).optional(),
+  suffix: z.string().optional(),
+  temperature: z.number().min(0).max(1).optional(),
+  top_p: z.number().min(0).max(1).optional(),
+  max_tokens: z.number().positive().optional(),
+  stop: z.array(z.string()).optional(),
+  outputPath: z.string().optional(),
+  streamToFile: z.boolean().optional(),
 });
 
 // Format Mistral API response
@@ -88,9 +98,50 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             task: {
               type: "string",
-              enum: ["complete", "fix", "test"],
-              description: "Type of task: 'complete' for code completion, 'fix' for bug fixing, 'test' for test generation",
+              enum: ["complete", "fix", "test", "fim"],
+              description: "Type of task: 'complete' for code completion, 'fix' for bug fixing, 'test' for test generation, 'fim' for fill-in-the-middle",
             },
+            model: {
+              type: "string",
+              enum: [MISTRAL_MODELS.CODESTRAL, MISTRAL_MODELS.CODESTRAL_MAMBA],
+              description: "Model to use (optional, defaults to codestral-latest)",
+            },
+            suffix: {
+              type: "string",
+              description: "Code that should come after the completion (for FIM task)",
+            },
+            temperature: {
+              type: "number",
+              minimum: 0,
+              maximum: 1,
+              description: "Sampling temperature (optional, defaults to 0.7)",
+            },
+            top_p: {
+              type: "number",
+              minimum: 0,
+              maximum: 1,
+              description: "Nucleus sampling threshold (optional, defaults to 1)",
+            },
+            max_tokens: {
+              type: "number",
+              minimum: 1,
+              description: "Maximum number of tokens to generate (optional, defaults to 1000)",
+            },
+            stop: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Stop sequences to end generation (optional)",
+            },
+            outputPath: {
+              type: "string",
+              description: "Path to save the generated code (optional)",
+            },
+            streamToFile: {
+              type: "boolean",
+              description: "If true, saves result to file and returns success message only (optional)",
+            }
           },
           required: ["code", "task"],
         },
@@ -107,18 +158,69 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
       const params = CodeCompletionSchema.parse(args);
 
-      // Get formatted messages for the task
-      const messages = mistralApi.createPrompt(
-        params.code,
-        params.language,
-        params.task
-      );
+      let completion: CompletionResponse;
 
-      // Make API call to Mistral
-      const completion = await mistralApi.chatCompletion(messages);
+      if (params.task === 'fim') {
+        // Use FIM endpoint for fill-in-the-middle task
+        completion = await mistralApi.fimCompletion(params.code, {
+          suffix: params.suffix,
+          temperature: params.temperature,
+          top_p: params.top_p,
+          max_tokens: params.max_tokens,
+          stop: params.stop,
+        });
+      } else {
+        // Get formatted messages for other tasks
+        const messages = mistralApi.createPrompt(
+          params.code,
+          params.language,
+          params.task,
+          params.suffix
+        );
+
+        // Make API call to Mistral
+        completion = await mistralApi.chatCompletion(messages, {
+          model: params.model,
+          temperature: params.temperature,
+          top_p: params.top_p,
+          max_tokens: params.max_tokens,
+          stop: params.stop,
+        });
+      }
       const formattedResponse = formatResponse(completion);
 
-      // Return the formatted response
+      // Handle file operations and response
+      if (params.outputPath) {
+        try {
+          await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
+          await fs.writeFile(params.outputPath, formattedResponse, 'utf-8');
+
+          // If streamToFile is true, return success message only
+          if (params.streamToFile) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Successfully saved to ${params.outputPath}`,
+                },
+              ],
+            };
+          }
+        } catch (error) {
+          console.error("Error saving to file:", error);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Error saving to file: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+
+      // Return the formatted response if not streaming to file
       return {
         content: [
           {
