@@ -1,3 +1,5 @@
+[![MseeP Badge](https://mseep.net/pr/bsmi021-mcp-mistral-codestral-badge.jpg)](https://mseep.ai/app/bsmi021-mcp-mistral-codestral)
+
 # Mistral Codestral MCP Server
 
 An MCP server implementation for the Mistral Codestral API, providing code completion, bug fixing, and test generation capabilities.
